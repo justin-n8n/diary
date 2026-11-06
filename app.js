@@ -1,12 +1,12 @@
-/* 小輝日記 v0.1.2：今天（問題、語音、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
-const APP_VERSION = '0.1.2';
+/* 阿輝的心情日誌（repo 名 diary）v0.2.0：今天（小語、心情方塊、問題、自由日記、語音三模式、心情、四它、安安、感恩、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
+const APP_VERSION = '0.2.0';
+const NEED_GS = 'v3';            // 新欄位要 Code.gs v3 才存得住
 const CHUNK = 8 * 1024 * 1024;   // 一塊 8 MiB（要是 256 KiB 的倍數）
-const MAIN_Q = '今天最想面對的一件事？';
-const BANK = [
-  '今天哪一刻讓你停了一下？', '今天有什麼事，你想對自己說辛苦了？', '今天誰讓你心裡一暖？', '今天有什麼事卡在心裡？',
-  '今天你做對了哪一件小事？', '今天最累的是哪一段？', '今天有什麼想謝謝的人或事？', '今天你學到了什麼？',
-  '今天哪件事可以放下了？', '如果今天重來，你會改哪裡？', '今天你陪家人的時候，記得哪一幕？', '明天你想怎麼對待自己？'
-];
+const MOODS = ['平靜', '歡喜', '感恩', '煩躁', '焦慮', '疲累', '低落'];
+const MOOD_GOOD = ['歡喜', '感恩'], MOOD_LOW = ['煩躁', '焦慮', '疲累', '低落'];
+const FOUR_ITS = ['面對它', '接受它', '處理它', '放下它'];
+const VOICE_MODES = [['both', '錄音＋轉文字'], ['text', '只轉文字'], ['audio', '只錄音']];
+const QUOTES_DAYS = 7;           // 幾天向雲端確認一次句庫
 const $ = (s, r = document) => r.querySelector(s);
 const view = $('#view');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -22,51 +22,113 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.ad
 
 /* ---------------- 問題 ---------------- */
 function questionFor(date, shift = 0) {
-  const n = dayNum(date);
-  if (!shift && n % 2 === 0) return MAIN_Q;   // 隔天回到主問題
-  return BANK[(Math.floor(n / 2) + shift) % BANK.length];
+  const n = dayNum(date) + shift, len = QUESTIONS.length;
+  return QUESTIONS[((n % len) + len) % len];
 }
 
-/* ---------------- 天數 ---------------- */
+/* ---------------- 天數與心情方塊 ---------------- */
 function stats(entries) {
   const days = new Set(entries.filter(e => !e.deleted).map(e => e.date));
   const today = dayNum(localDate());
   const in14 = [...days].filter(d => today - dayNum(d) < 14 && today >= dayNum(d)).length;
   return { total: days.size, in14 };
 }
+/* 好和低落都有時看哪邊多，一樣多算普通；自訂心情、平靜、沒選心情都算普通 */
+function moodClass(moods = []) {
+  const good = moods.filter(m => MOOD_GOOD.includes(m)).length, low = moods.filter(m => MOOD_LOW.includes(m)).length;
+  return good > low ? 'g' : low > good ? 'l' : 'm';
+}
+function days14(entries) {
+  const last = {};   // 當天多篇時用最後一篇
+  for (const e of entries) if (!e.deleted && (!last[e.date] || String(e.at) > String(last[e.date].at))) last[e.date] = e;
+  const out = [], now = new Date();
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i), key = localDate(d);
+    out.push({ date: key, cls: last[key] ? moodClass(last[key].moods) : '' });
+  }
+  return out;
+}
+const daysHtml = entries => `<div class="days">${days14(entries).map(d => `<i class="${d.cls}" title="${esc(d.date)}"></i>`).join('')}</div>
+  <div class="legend"><span><b class="g"></b>好</span><span><b class="m"></b>普通</span><span><b class="l"></b>低落</span><span><b></b>沒寫</span></div>`;
+
+/* ---------------- 每日小語：每天三句，一次一句 ---------------- */
+let quoteList = [], quoteOrder = [], quoteI = 0;
+function shuffled(n) {   // 固定順序的洗牌，每天不用記狀態，主題也不會擠在一起
+  const a = [...Array(n).keys()]; let s = 47;
+  for (let i = n - 1; i > 0; i--) { s = (s * 1103515245 + 12345) % 2147483648; const j = s % (i + 1); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+function setQuotes(list) { quoteList = Array.isArray(list) ? list : []; quoteOrder = shuffled(quoteList.length); }
+function quoteFor(date, i) {
+  const n = quoteList.length; if (!n) return null;
+  return quoteList[quoteOrder[(((dayNum(date) * 3 + i) % n) + n) % n]];
+}
+function paintQuote() {
+  const box = $('#quoteBox'); if (!box) return;
+  const q = quoteFor(localDate(), quoteI);
+  if (!q) { box.innerHTML = ''; return; }
+  const work = q.work ? `《${esc(q.work)}》` : '';
+  const src = q.said ? `${esc(q.said)}，引自 ${esc(q.author)}${work}` : `${esc(q.author)}${work ? '，' + work : ''}`;
+  box.innerHTML = `<div class="quote"><div class="en">“${esc(q.en)}”</div><div class="zh">${esc(q.zh)}</div>
+    <div class="src">— ${src}${q.year ? `（${esc(q.year)}）` : ''}</div>
+    <div class="qfoot"><span>${quoteI + 1}/3</span><button class="link" id="nextQuote">下一句 ›</button></div></div>`;
+}
+async function loadQuotes(force) {   // 句庫有著作權，不放公開 repo：放私人雲端，用密語讀進手機
+  const cfg = await kvGet('cfg');
+  if (!cfg?.url) return;
+  const at = await kvGet('quotesAt');
+  if (!force && quoteList.length && at && Date.now() - at < QUOTES_DAYS * 86400000) return;
+  try {
+    const r = await api('quotes');
+    await kvSet('quotesAt', Date.now());
+    if (Array.isArray(r.quotes) && r.quotes.length) { await kvSet('quotes', r.quotes); setQuotes(r.quotes); paintQuote(); }
+  } catch (_) { /* 舊版 Code.gs 或斷線：小語不影響寫日記，下次再試 */ }
+}
 
 /* ---------------- 草稿 ---------------- */
 function newDraft() {
-  const date = localDate();
-  return { date, shift: 0, q: questionFor(date), text: '', accept: '', handle: '', letgo: '', anan: '', private: false, media: [] };
+  const date = localDate(), { q, cat } = questionFor(date);
+  return { date, shift: 0, q, qcat: cat, text: '', moods: [], fourIt: '', ananMood: '', thanks: ['', '', ''], accept: '', handle: '', letgo: '', anan: '', private: false, media: [] };
 }
+/* 舊版草稿、舊日記沒有新欄位，補齊才不會出錯；舊欄位原樣留著 */
+const fill = d => {
+  const r = { ...newDraft(), ...d };
+  if (d.q && d.qcat === undefined) r.qcat = '';   // 舊題目沒有類別
+  r.thanks = [...(r.thanks || [])]; while (r.thanks.length < 3) r.thanks.push('');
+  r.moods = [...(r.moods || [])];
+  return r;
+};
 /* 今天的草稿和修改舊篇分開放，修改舊篇不會蓋掉今天寫到一半的內容 */
 const keepDraft = d => kvSet(d.editId ? 'editDraft' : 'draft', d);
 const dropDraft = d => kvDel(d.editId ? 'editDraft' : 'draft');
 async function getDraft() {
   const edit = await kvGet('editDraft');
-  if (edit) return edit;
-  let d = await kvGet('draft');
-  if (!d) return newDraft();
+  if (edit) return fill(edit);
+  const saved = await kvGet('draft');
+  if (!saved) return newDraft();
+  const d = fill(saved);
   // 昨天沒寫完的草稿，內容留著，日期跟著今天；修改舊日記的不動
-  if (!d.editId && d.date !== localDate()) { d.date = localDate(); if (!d.text) { d.shift = 0; d.q = questionFor(d.date); } }
+  if (d.date !== localDate()) { d.date = localDate(); if (!d.text) { const n = questionFor(d.date); d.shift = 0; d.q = n.q; d.qcat = n.cat; } }
   return d;
 }
 
-/* ---------------- 語音 ---------------- */
-const MIC_HELP = '請打開麥克風權限：用 Chrome 開這個網址 → 網址列左邊的圖示 → 權限 → 麥克風 →「允許」。改完把 App 關掉重開。';
-let recog = null, listening = false, micTarget = null;
-function stopMic() { listening = false; try { recog?.stop(); } catch (_) {} recog = null; const b = $('#micBtn'); if (b) { b.textContent = '🎤 用說的'; b.classList.remove('primary'); } keepAwake(false); }
+/* ---------------- 語音：錄音（MediaRecorder）＋轉文字（Web Speech），三種模式 ---------------- */
+const MIC_HELP = '請打開麥克風權限：用 Chrome 開這個網址 → 網址列左邊的圖示 → 權限 → 麥克風 →「允許」。如果還是不行：手機的「設定 → 應用程式 → Chrome → 權限 → 麥克風」也要允許。改完把 App 關掉重開。';
+let recog = null, recorder = null, recording = false, recogFailed = false, starting = false, stopped = null, stopWait = null, voiceSeq = 0, slowTimer;
+let vmode = 'both', micTarget = null;
+const note = m => { const n = $('#interim'); if (n) n.textContent = m; };
+const micFail = m => { const n = $('#interim'); if (n) n.innerHTML = `<div class="help">⚠️ ${esc(m)}<br>${esc(MIC_HELP)}</div>`; };
+const micErr = e => ({ NotAllowedError: '麥克風權限沒有允許。', NotFoundError: '找不到麥克風。', NotReadableError: '麥克風被別的 App 佔用中（例如通話、錄音）。' }[e.name] || '無法使用麥克風：' + (e.message || e.name));
+function micUi() { const b = $('#micBtn'); if (b) { b.disabled = false; b.textContent = recording ? '⏹ 說完了' : '🎤 用說的'; b.classList.toggle('rec', recording); } }
 function appendTo(el, t) {
-  t = t.trim(); if (!t || !el) return;
+  t = t.trim(); if (!t || !el?.isConnected) return;
   const v = el.value;
   el.value = v + (!v || /[\s，。！？、；：,.!?]$/.test(v) ? '' : '，') + t;
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
-function startMic() {
+function startRecog() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const note = m => { const n = $('#interim'); if (n) n.textContent = m; };
-  if (!SR) { note('這個瀏覽器不支援語音轉文字，請用鍵盤上的麥克風。'); return; }
+  if (!SR) { recogFailed = true; note(vmode === 'text' ? '這支手機不支援語音轉文字，請用鍵盤上的麥克風。' : '這支手機不支援語音轉文字，這次只錄音。'); if (vmode === 'text') stopVoice(); return; }
   recog = new SR(); recog.lang = 'zh-TW'; recog.continuous = true; recog.interimResults = true;
   recog.onresult = e => {
     let interim = '';
@@ -78,14 +140,89 @@ function startMic() {
   };
   recog.onerror = e => {
     if (e.error === 'no-speech' || e.error === 'aborted') return;
-    stopMic();
-    const n = $('#interim');
-    if (n) n.innerHTML = `<div class="help">⚠️ ${esc({ network: '沒有網路，無法轉文字，可以先用打的。', 'not-allowed': '沒有麥克風權限。', 'service-not-allowed': '這支手機不允許語音轉文字。' }[e.error] || '轉文字發生問題：' + e.error)}${/allowed/.test(e.error) ? '<br>' + esc(MIC_HELP) : ''}</div>`;
+    recogFailed = true;
+    const m = { network: '沒有網路，無法轉文字。', 'not-allowed': '沒有麥克風權限。', 'service-not-allowed': '這支手機不允許語音轉文字。',
+      'audio-capture': '麥克風被錄音佔用，無法同時轉文字。可以改成「只轉文字」或「只錄音」。' }[e.error] || '轉文字發生問題：' + e.error;
+    if (/allowed/.test(e.error)) micFail(m); else note(m + (vmode === 'both' ? '（錄音照常）' : ''));
+    if (vmode === 'text') stopVoice();   // 只轉文字時沒東西在收音了，不要讓人以為還在聽
   };
-  recog.onend = () => { if (listening) { try { recog.start(); } catch (_) {} } };
-  try { recog.start(); listening = true; } catch (e) { note('轉文字無法開始：' + e.message); return; }
-  const b = $('#micBtn'); b.textContent = '⏹ 說完了'; b.classList.add('primary');
-  note('請說…'); keepAwake(true);
+  recog.onend = () => { if (recording && !recogFailed) { try { recog.start(); } catch (_) { /* 已在跑 */ } } };
+  try { recog.start(); } catch (e) { recogFailed = true; note('轉文字無法開始：' + e.message); if (vmode === 'text') stopVoice(); }
+}
+/* 同一時間只准一個麥克風請求：voiceSeq 變了就代表這次請求作廢，晚到的只收掉自己拿到的麥克風 */
+async function startVoice(draft) {
+  if (starting || recording) return;
+  starting = true;
+  const my = ++voiceSeq, stale = () => my !== voiceSeq;
+  const b = $('#micBtn'); if (b) { b.textContent = '⏳ 正在開啟麥克風…'; b.disabled = true; }
+  const give = fn => { starting = false; clearTimeout(slowTimer); micUi(); fn?.(); };
+  if (!navigator.mediaDevices?.getUserMedia) { give(() => micFail('這個瀏覽器不能使用麥克風。')); return; }
+  try {   // 已經被封鎖的話，Chrome 不會再跳視窗，直接說明
+    const st = await navigator.permissions?.query({ name: 'microphone' });
+    if (stale()) return;
+    if (st?.state === 'denied') { give(() => micFail('麥克風權限被封鎖了，所以不會跳出詢問視窗。')); return; }
+  } catch (_) { if (stale()) return; /* 有些瀏覽器不支援查詢，直接試 */ }
+  note('正在開啟麥克風…（如果跳出詢問，請按「允許」）');
+  slowTimer = setTimeout(() => {
+    if (stale()) return;
+    voiceSeq++;
+    give(() => { const x = $('#micBtn'); if (x) x.textContent = '🎤 再試一次'; micFail('5 秒了麥克風還沒有回應，可能是權限視窗沒有顯示出來。'); });
+  }, 5000);
+  let s;
+  try { s = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { if (!stale()) give(() => micFail(micErr(e))); return; }
+  if (stale()) { s.getTracks().forEach(t => t.stop()); return; }
+  try {
+    if (vmode === 'text') s.getTracks().forEach(t => t.stop());   // 只轉文字：先確認權限，拿到就放掉
+    else {
+      const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(t => window.MediaRecorder?.isTypeSupported?.(t));
+      const rec = new MediaRecorder(s, mime ? { mimeType: mime } : undefined);
+      const chunks = [], d = draft;
+      rec.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      rec.onstop = async () => {
+        s.getTracks().forEach(t => t.stop());
+        try { await addAudio(new Blob(chunks, { type: (rec.mimeType || 'audio/webm').split(';')[0] }), d); } finally { stopped?.(); stopped = null; }
+      };
+      rec.start(1000);
+      recorder = rec;
+    }
+  } catch (e) { s.getTracks().forEach(t => t.stop()); give(() => micFail(micErr(e))); return; }
+  starting = false; clearTimeout(slowTimer);
+  recording = true; recogFailed = false; micUi(); note('請說…');
+  keepAwake(true);
+  if (vmode !== 'audio') startRecog();
+}
+/* 停止；回傳的 Promise 等錄音檔真的放進草稿才完成（最多 3 秒）。連呼叫兩次拿到同一個 Promise；開啟中就當取消 */
+function stopVoice() {
+  if (starting) { voiceSeq++; starting = false; clearTimeout(slowTimer); micUi(); note(''); }
+  if (!recording) return stopWait || Promise.resolve();
+  recording = false;
+  try { recog?.stop(); } catch (_) { /* 已停 */ }
+  recog = null;
+  let wait = Promise.resolve();
+  if (recorder && recorder.state !== 'inactive') {
+    wait = Promise.race([new Promise(res => { stopped = res; }), new Promise(res => setTimeout(res, 3000))]);
+    recorder.stop();
+  }
+  recorder = null; micUi(); keepAwake(false);
+  setTimeout(() => { if (!recording && !recogFailed) note(''); }, 1500);
+  stopWait = wait.finally(() => { stopWait = null; });
+  return stopWait;
+}
+async function addAudio(blob, d) {
+  if (!blob.size || d.dropped) return;
+  const id = uid(), ext = /mp4/.test(blob.type) ? 'm4a' : 'webm';
+  try { await dbPut('blobs', { id, blob }); }
+  catch (_) { toast('手機空間不夠，這段錄音放不進來'); return; }
+  const m = { id, name: `錄音_${localTime().replace(':', '')}_${id.slice(-4)}.${ext}`, mime: blob.type, size: blob.size, kind: 'audio', fileId: '' };
+  if (d.savedId) {   // 這篇已經存了：錄音接到那一篇，不要把草稿救回來
+    const e = await dbGet('entries', d.savedId);
+    if (e) { await dbPut('entries', { ...e, media: [...e.media, m], dirty: true, rev: (e.rev || 0) + 1 }); sync(); }
+    return;
+  }
+  d.media.push(m);
+  await keepDraft(d);
+  paintAudio(d);
 }
 let wake = null, wakeCount = 0;
 async function keepAwake(on) {
@@ -136,12 +273,29 @@ async function addFiles(files, draft) {
   await keepDraft(draft);
 }
 function tile(m, canRemove) {
-  const inner = m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : (m.kind === 'video' ? '🎬' : '🖼️');
+  const inner = m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : ({ video: '🎬', audio: '🎧' }[m.kind] || '🖼️');
   const tag = m.kind === 'video' ? `<span class="tag">🎬 ${mb(m.size || 0)}</span>` : '';
   const rm = canRemove ? `<button class="rm" data-rm="${esc(m.id)}" aria-label="拿掉">✕</button>` : '';
   const link = !canRemove && m.fileId ? `<a href="https://drive.google.com/file/d/${esc(m.fileId)}/view" target="_blank" rel="noopener" style="display:contents">${inner}</a>` : inner;
   return `<div class="tile" data-media="${esc(m.id)}">${link}${tag}${rm}</div>`;
 }
+const pics = list => list.filter(m => m.kind !== 'audio');
+const auds = list => list.filter(m => m.kind === 'audio');
+const paintGrid = d => { const g = $('#grid'); if (g) g.innerHTML = pics(d.media).map(m => tile(m, true)).join(''); };
+/* 錄音：手機上還有原檔就直接播；傳上雲端後手機不留，點連結用雲端硬碟打開 */
+const audioRow = (m, canRemove) => `<div class="aud">${m.fileId
+  ? `<a href="https://drive.google.com/file/d/${esc(m.fileId)}/view" target="_blank" rel="noopener">🎧 ${esc(m.name)}</a>`
+  : `<audio controls preload="none" data-blob="${esc(m.id)}"></audio>`}${canRemove ? `<button class="link" data-rm="${esc(m.id)}">拿掉</button>` : ''}</div>`;
+async function fillAudio(root) {
+  for (const a of root.querySelectorAll('audio[data-blob]')) {
+    const rec = await dbGet('blobs', a.dataset.blob);
+    if (rec) a.src = URL.createObjectURL(rec.blob);
+    else a.replaceWith(Object.assign(document.createElement('span'), { className: 'muted small', textContent: '🎧 錄音在另一台手機，傳上雲端後這裡會有連結' }));
+  }
+}
+function paintAudio(d) { const b = $('#audioBox'); if (b) { b.innerHTML = auds(d.media).map(m => audioRow(m, true)).join(''); fillAudio(b); } }
+const chip = (label, attr, on) => `<button type="button" class="chip ${on ? 'on' : ''}" ${attr}="${esc(label)}">${esc(label)}</button>`;
+const thanksRow = (t, i) => `<div class="thx"><span>${i + 1}</span><input type="text" data-i="${i}" value="${esc(t)}" aria-label="感恩第 ${i + 1} 件"></div>`;
 
 /* ---------------- 今天 ---------------- */
 async function renderToday() {
@@ -150,34 +304,65 @@ async function renderToday() {
   const s = stats(entries);
   const wrote = entries.filter(e => e.date === localDate() && !e.deleted).length;
   const cfg = await kvGet('cfg');
-  const more = draft.accept || draft.handle || draft.letgo;
+  vmode = (await kvGet('voiceMode')) || 'both';
+  const custom = (await kvGet('customMoods')) || [];
+  const moods = [...new Set([...MOODS, ...custom, ...draft.moods])];
+  const edit = !!draft.editId;
+  const legacy = draft.accept || draft.handle || draft.letgo || draft.anan;   // 舊版日記的欄位，有內容才出現
   view.innerHTML = `
-    <div class="head"><h1>${draft.editId ? '修改 ' + esc(niceDate(draft.date)) : esc(niceDate(draft.date))}</h1>
-      <span class="muted small">近 14 天寫了 ${s.in14} 天・累積 ${s.total} 天</span></div>
-    ${wrote && !draft.editId ? `<p class="muted small">今天已經寫了 ${wrote} 篇，想再寫也可以。</p>` : ''}
+    <div class="top"><span class="cloud c1"></span><span class="cloud c2"></span><span class="cloud c3"></span>
+      <div class="brand">阿輝的心情日誌</div>
+      <h1>${edit ? '修改 ' : ''}${esc(niceDate(draft.date))}</h1>
+      <p>近 14 天寫了 ${s.in14} 天・累積 ${s.total} 天</p>
+      ${edit ? '' : `<div id="quoteBox"></div>${daysHtml(entries)}`}
+    </div>
+    <div class="under">
+    ${wrote && !edit ? `<p class="note">今天已經寫了 ${wrote} 篇，想再寫也可以。</p>` : ''}
     ${cfg?.url ? '' : '<p class="help">還沒連雲端，日記先存在手機。到「設定」填網址和密語就會送上去。</p>'}
     <div class="card">
+      <span class="cat" id="qcat">${esc(draft.qcat)}</span>${edit ? '' : '<button class="link next" id="nextQ">換一題</button>'}
       <p class="q" id="q">${esc(draft.q)}</p>
-      ${draft.editId ? '' : '<button class="link" id="nextQ">換一題</button>'}
-      <label class="field"><textarea id="text" data-f="text" placeholder="用說的或打字，講一段就算寫完">${esc(draft.text)}</textarea></label>
-      <button class="btn wide" id="micBtn">🎤 用說的</button>
+    </div>
+    <div class="card">
+      <h2>📝 我的日記</h2>
+      <textarea id="text" data-f="text" placeholder="想到什麼就寫什麼，用說的也可以">${esc(draft.text)}</textarea>
+      <div class="modes" id="vmode">${VOICE_MODES.map(([v, l]) => `<button type="button" class="${vmode === v ? 'on' : ''}" data-vmode="${v}">${l}</button>`).join('')}</div>
+      <button class="btn primary wide" id="micBtn">🎤 用說的</button>
       <div id="interim"></div>
-      <details ${more ? 'open' : ''}><summary>想多講</summary>
-        <label class="field"><span>哪一部分你已經接受了？</span><textarea class="short" data-f="accept">${esc(draft.accept)}</textarea></label>
-        <label class="field"><span>你打算怎麼處理？下一步是什麼？</span><textarea class="short" data-f="handle">${esc(draft.handle)}</textarea></label>
-        <label class="field"><span>什麼可以放下了？</span><textarea class="short" data-f="letgo">${esc(draft.letgo)}</textarea></label>
-      </details>
+      <div id="audioBox"></div>
     </div>
     <div class="card">
-      <label class="field" style="margin-top:0"><span>安安今天的一句話</span><textarea class="short" data-f="anan">${esc(draft.anan)}</textarea></label>
+      <h2>😊 今天的心情</h2>
+      <div class="chips" id="moods">${moods.map(m => chip(m, 'data-mood', draft.moods.includes(m))).join('')}</div>
+      <h2 class="gap">🪷 四它</h2>
+      <div class="chips" id="four">${FOUR_ITS.map(f => chip(f, 'data-four', draft.fourIt === f)).join('')}</div>
     </div>
     <div class="card">
-      <label class="btn" style="width:100%">📷 加照片影片<input id="pick" type="file" accept="image/*,video/*" multiple hidden></label>
-      <div class="grid" id="grid">${draft.media.map(m => tile(m, true)).join('')}</div>
+      <h2>👧 與安安相處的心情</h2>
+      <textarea class="short" data-f="ananMood" placeholder="今天和安安相處的感受、教養的想法">${esc(draft.ananMood)}</textarea>
+    </div>
+    <div class="card">
+      <h2>🙏 今天感恩的三件事</h2>
+      <div id="thanks">${draft.thanks.map(thanksRow).join('')}</div>
+      <button class="link" id="moreThanks">＋再加一件</button>
+    </div>
+    ${legacy ? `<div class="card"><h2>舊版的內容</h2>
+      ${draft.accept ? `<label class="field"><span>接受它</span><textarea class="short" data-f="accept">${esc(draft.accept)}</textarea></label>` : ''}
+      ${draft.handle ? `<label class="field"><span>處理它</span><textarea class="short" data-f="handle">${esc(draft.handle)}</textarea></label>` : ''}
+      ${draft.letgo ? `<label class="field"><span>放下它</span><textarea class="short" data-f="letgo">${esc(draft.letgo)}</textarea></label>` : ''}
+      ${draft.anan ? `<label class="field"><span>安安今天的一句話</span><textarea class="short" data-f="anan">${esc(draft.anan)}</textarea></label>` : ''}
+    </div>` : ''}
+    <div class="card">
+      <h2>📷 照片影片</h2>
+      <div class="grid" id="grid">${pics(draft.media).map(m => tile(m, true)).join('')}</div>
+      <label class="btn add">＋ 加照片影片<input id="pick" type="file" accept="image/*,video/*" multiple hidden></label>
       <label class="check"><input type="checkbox" id="priv" ${draft.private ? 'checked' : ''}>這篇不給小輝看</label>
     </div>
-    <button class="btn primary wide" id="save">${draft.editId ? '存好修改' : '存起來'}</button>
-    ${draft.editId ? '<button class="btn wide" id="cancel">不改了</button>' : ''}`;
+    <button class="btn primary wide save" id="save">${edit ? '存好修改' : '存起來'}</button>
+    ${edit ? '<button class="btn wide" id="cancel">不改了</button>' : ''}
+    </div>`;
+  paintQuote();
+  paintAudio(draft);
 
   let timer;
   const keep = () => { clearTimeout(timer); timer = setTimeout(() => keepDraft(draft), 300); };
@@ -185,6 +370,7 @@ async function renderToday() {
   view.oninput = e => {
     const f = e.target.dataset?.f;
     if (f) { draft[f] = e.target.value; keep(); }
+    if (e.target.dataset?.i !== undefined) { draft.thanks[Number(e.target.dataset.i)] = e.target.value; keep(); }
     if (e.target.id === 'priv') { draft.private = e.target.checked; keep(); }
   };
   view.onchange = async e => {
@@ -194,40 +380,70 @@ async function renderToday() {
       toast(`正在放進 ${n} 個檔案…`);
       await addFiles([...e.target.files], draft);
       e.target.value = '';
-      $('#grid').innerHTML = draft.media.map(m => tile(m, true)).join('');
+      paintGrid(draft);
     }
   };
-  view.addEventListener('focusin', e => { if (e.target.matches?.('textarea')) micTarget = e.target; });
   view.onclick = async e => {
-    if (e.target.id === 'micBtn') { listening ? stopMic() : startMic(); return; }
-    if (e.target.id === 'nextQ') { draft.shift++; draft.q = questionFor(draft.date, draft.shift); $('#q').textContent = draft.q; keep(); return; }
+    if (e.target.id === 'micBtn') { recording ? stopVoice() : startVoice(draft); return; }
+    if (e.target.id === 'nextQuote') { quoteI = (quoteI + 1) % 3; paintQuote(); return; }
+    if (e.target.id === 'nextQ') {
+      draft.shift++;
+      const n = questionFor(draft.date, draft.shift);
+      draft.q = n.q; draft.qcat = n.cat;
+      $('#q').textContent = n.q; const c = $('#qcat'); if (c) c.textContent = n.cat;
+      keep(); return;
+    }
+    const vm = e.target.closest?.('[data-vmode]');
+    if (vm) {
+      if (recording || starting) { toast('先按「說完了」再換模式'); return; }
+      vmode = vm.dataset.vmode; kvSet('voiceMode', vmode);
+      document.querySelectorAll('#vmode button').forEach(b => b.classList.toggle('on', b.dataset.vmode === vmode));
+      return;
+    }
+    const mood = e.target.dataset?.mood;
+    if (mood) { draft.moods = draft.moods.includes(mood) ? draft.moods.filter(x => x !== mood) : [...draft.moods, mood]; e.target.classList.toggle('on'); keep(); return; }
+    const four = e.target.dataset?.four;
+    if (four) {
+      draft.fourIt = draft.fourIt === four ? '' : four;
+      document.querySelectorAll('#four .chip').forEach(b => b.classList.toggle('on', b.dataset.four === draft.fourIt));
+      keep(); return;
+    }
+    if (e.target.id === 'moreThanks') {
+      draft.thanks.push('');
+      $('#thanks').insertAdjacentHTML('beforeend', thanksRow('', draft.thanks.length - 1));
+      $('#thanks .thx:last-child input').focus(); keep(); return;
+    }
     const rm = e.target.dataset?.rm;
     if (rm) {
       draft.media = draft.media.filter(m => m.id !== rm);
       if (!draft.editId) await dbDel('blobs', rm);
       await keepDraft(draft);
-      $('#grid').innerHTML = draft.media.map(m => tile(m, true)).join('');
+      paintGrid(draft); paintAudio(draft);
       return;
     }
-    if (e.target.id === 'cancel') { clearTimeout(timer); await dropDraft(draft); location.hash = '#e/' + draft.editId; return; }
-    if (e.target.id === 'save') { stopMic(); clearTimeout(timer); await saveDraft(draft); }
+    if (e.target.id === 'cancel') { await stopVoice(); clearTimeout(timer); draft.dropped = true; await dropDraft(draft); location.hash = '#e/' + draft.editId; return; }
+    if (e.target.id === 'save') { clearTimeout(timer); await saveDraft(draft); }
   };
 }
 let saving = false;
 async function saveDraft(d) {
   if (saving) return;   // 連按兩下只存一篇
   saving = true;
-  try { await doSave(d); } finally { saving = false; }
+  const b = $('#save'); if (b) b.disabled = true;
+  try { await stopVoice(); await doSave(d); }   // 等錄音檔收好才存
+  finally { saving = false; if (b) b.disabled = false; }
 }
 async function doSave(d) {
-  if (![d.text, d.accept, d.handle, d.letgo, d.anan].some(x => x.trim()) && !d.media.length) { toast('講一句話再存'); return; }
+  const thanks = d.thanks.map(t => t.trim()).filter(Boolean);   // 空的不存
+  if (![d.text, d.ananMood, d.accept, d.handle, d.letgo, d.anan].some(x => x.trim()) && !thanks.length && !d.moods.length && !d.fourIt && !d.media.length) { toast('寫一點或選個心情再存'); return; }
   const now = new Date();
   const old = d.editId ? await dbGet('entries', d.editId) : null;
   for (const m of d.media) { const o = old?.media.find(x => x.id === m.id); if (o?.fileId) m.fileId = o.fileId; }
-  const e = { id: d.editId || uid(), date: d.date, time: old?.time || localTime(now), at: old?.at || now.toISOString(), q: d.q,
-    text: d.text, accept: d.accept, handle: d.handle, letgo: d.letgo, anan: d.anan, private: d.private, media: d.media,
-    dirty: true, rev: (old?.rev || 0) + 1 };
+  const e = { id: d.editId || uid(), date: d.date, time: old?.time || localTime(now), at: old?.at || now.toISOString(), q: d.q, qcat: d.qcat,
+    text: d.text, moods: d.moods, fourIt: d.fourIt, ananMood: d.ananMood, thanks, accept: d.accept, handle: d.handle, letgo: d.letgo, anan: d.anan,
+    private: d.private, media: d.media, dirty: true, rev: (old?.rev || 0) + 1 };
   await dbPut('entries', e);
+  d.savedId = e.id;
   await dropDraft(d);
   toast('寫好了 🙏');
   location.hash = '#list';
@@ -235,7 +451,11 @@ async function doSave(d) {
 }
 
 /* ---------------- 時間軸與單篇 ---------------- */
-function preview(e) { return [e.text, e.accept, e.handle, e.letgo].filter(Boolean).join('\n') || e.anan || '（照片影片）'; }
+function preview(e) {
+  return [e.text, e.ananMood, e.accept, e.handle, e.letgo].filter(Boolean).join('\n') || e.anan || (e.thanks || []).join('、') || (e.moods || []).join('、') || e.fourIt
+    || (auds(e.media).length && !pics(e.media).length ? '（錄音）' : '（照片影片）');
+}
+const tags = e => [...(e.moods || []).map(m => `<span class="tag2 ${moodClass([m])}">${esc(m)}</span>`), e.fourIt ? `<span class="tag2">🪷 ${esc(e.fourIt)}</span>` : ''].join('');
 async function renderList() {
   const list = (await dbAll('entries')).filter(e => !e.deleted).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   if (!list.length) { view.innerHTML = '<div class="head"><h1>時間軸</h1></div><p class="muted">還沒有日記。到「今天」講一段就有了。</p>'; return; }
@@ -243,7 +463,7 @@ async function renderList() {
   for (const e of list) {
     if (e.date !== day) { day = e.date; html += `<div class="day">${esc(niceDate(day))}<span class="muted small">　${esc(day.slice(0, 4))}</span></div>`; }
     html += `<a class="card item" href="#e/${esc(e.id)}"><div class="meta">${esc(e.time)}${e.private ? '・🔒 不給小輝看' : ''}${e.dirty ? '・⏳ 還沒送上雲端' : ''}</div>
-      <div class="pv">${esc(preview(e))}</div>${e.media.length ? `<div class="grid">${e.media.slice(0, 4).map(m => tile(m, false).replace(/<a [^>]*>|<\/a>/g, '')).join('')}</div>` : ''}</a>`;
+      <div class="pv">${esc(preview(e))}</div>${tags(e) ? `<div class="tags">${tags(e)}</div>` : ''}${e.media.length ? `<div class="grid">${e.media.slice(0, 4).map(m => tile(m, false).replace(/<a [^>]*>|<\/a>/g, '')).join('')}</div>` : ''}</a>`;
   }
   view.innerHTML = html;
   view.onclick = view.oninput = view.onchange = null;
@@ -256,7 +476,7 @@ async function loadThumbs(list) {
   thumbBusy = true;
   try {
     for (const e of list) for (const m of e.media) {
-      if (m.thumb || !m.fileId || m.noThumb) continue;
+      if (m.thumb || !m.fileId || m.noThumb || m.kind === 'audio') continue;
       const r = await api('thumb', { fileId: m.fileId });
       await patchMedia(e.id, m.id, r.data ? { thumb: r.data } : { noThumb: true });
       m.thumb = r.data;
@@ -271,13 +491,19 @@ async function renderEntry(id) {
   if (!e || e.deleted) { location.hash = '#list'; return; }
   const sec = (t, v) => v ? `<h2>${esc(t)}</h2><div class="body">${esc(v)}</div>` : '';
   view.innerHTML = `<div class="head"><h1>${esc(niceDate(e.date))}</h1><span class="muted small">${esc(e.time)}${e.private ? '・🔒 不給小輝看' : ''}${e.dirty ? '・⏳ 還沒送上雲端' : ''}</span></div>
-    <div class="card">${sec(e.q, e.text)}${sec('接受它', e.accept)}${sec('處理它', e.handle)}${sec('放下它', e.letgo)}${sec('安安今天的一句話', e.anan)}
-    ${e.media.length ? `<div class="grid">${e.media.map(m => tile(m, false)).join('')}</div><p class="muted small">點照片影片會用雲端硬碟打開原檔</p>` : ''}</div>
+    <div class="card">${e.q ? `<p class="muted small" style="margin-top:0">${e.qcat ? esc(e.qcat) + '・' : ''}${esc(e.q)}</p>` : ''}
+    ${sec('我的日記', e.text)}${tags(e) ? `<div class="tags">${tags(e)}</div>` : ''}${sec('與安安相處的心情', e.ananMood)}
+    ${e.thanks?.length ? `<h2>今天感恩的事</h2><ol class="body">${e.thanks.map(t => `<li>${esc(t)}</li>`).join('')}</ol>` : ''}
+    ${sec('接受它', e.accept)}${sec('處理它', e.handle)}${sec('放下它', e.letgo)}${sec('安安今天的一句話', e.anan)}
+    ${auds(e.media).map(m => audioRow(m, false)).join('')}
+    ${pics(e.media).length ? `<div class="grid">${pics(e.media).map(m => tile(m, false)).join('')}</div><p class="muted small">點照片影片會用雲端硬碟打開原檔</p>` : ''}</div>
     <div class="row"><button class="btn" id="edit">修改</button><button class="btn" id="del">刪除</button></div>`;
+  fillAudio(view);
   view.oninput = view.onchange = null;
   view.onclick = async ev => {
     if (ev.target.id === 'edit') {
-      await kvSet('editDraft', { editId: e.id, date: e.date, shift: 0, q: e.q, text: e.text, accept: e.accept, handle: e.handle, letgo: e.letgo, anan: e.anan, private: e.private, media: e.media });
+      await kvSet('editDraft', { editId: e.id, date: e.date, shift: 0, q: e.q, qcat: e.qcat || '', text: e.text || '', moods: e.moods || [], fourIt: e.fourIt || '', ananMood: e.ananMood || '', thanks: e.thanks || [],
+        accept: e.accept || '', handle: e.handle || '', letgo: e.letgo || '', anan: e.anan || '', private: e.private, media: e.media });
       location.hash = '#today';
     }
     if (ev.target.id === 'del' && confirm('刪除這篇？雲端的檔案會移到「已刪除」資料夾，不會真的消失。')) {
@@ -298,7 +524,12 @@ async function renderSettings() {
   const list = await dbAll('entries');
   const waiting = list.filter(e => e.dirty).length;
   const est = await navigator.storage?.estimate?.();
+  const custom = (await kvGet('customMoods')) || [];
   view.innerHTML = `<div class="head"><h1>設定</h1><span class="muted small">v${APP_VERSION}</span></div>
+    <div class="card"><h2 style="margin-top:0">自訂心情</h2>
+      <p class="muted small">加進「今天的心情」，方塊算普通。</p>
+      <div class="chips" id="cm">${custom.map(m => `<button type="button" class="chip on" data-cm="${esc(m)}">${esc(m)} ✕</button>`).join('')}</div>
+      <div class="addrow"><input type="text" id="newMood" maxlength="8" placeholder="例如：感動" aria-label="新的心情"><button class="btn" id="addMood">加入</button></div></div>
     <div class="card"><h2 style="margin-top:0">雲端同步</h2>
       <label class="field"><span>Apps Script 網址</span><input type="url" id="url" value="${esc(cfg.url || '')}" autocomplete="off"></label>
       <label class="field"><span>密語</span><input type="password" id="pass" value="${esc(cfg.pass || '')}" autocomplete="off"></label>
@@ -308,17 +539,30 @@ async function renderSettings() {
       <p class="small">手機上有 ${list.filter(e => !e.deleted).length} 篇，${waiting} 篇等著送上雲端。</p>
       <p class="small">上次同步：${esc(lastSync?.at ? new Date(lastSync.at).toLocaleString('zh-TW') : '還沒有')}${lastSync?.error ? '<br>⚠️ ' + esc(lastSync.error) : ''}</p>
       <p class="small">上次上傳：${last ? `${esc(last.name)}，${mb(last.size)}，${last.mode === 'direct' ? '手機直傳' : '經 Apps Script 切塊'}，${last.sec} 秒` : '還沒有'}</p>
+      <p class="small">每日小語：${quoteList.length ? `${quoteList.length} 句` : '還沒讀到（要先連雲端）'}</p>
       ${est ? `<p class="small">手機空間：已用 ${mb(est.usage)}</p>` : ''}
       <button class="btn wide" id="now">現在同步</button>
       <button class="btn wide" id="restore">從雲端還原</button>
       <p class="muted small">換手機時：填好網址和密語，按「從雲端還原」就會抓回全部文字。原檔留在雲端，不會下載到手機。</p></div>`;
   view.oninput = view.onchange = null;
   view.onclick = async e => {
+    const saveMoods = async list => { await kvSet('customMoods', list); await renderSettings(); };
+    if (e.target.id === 'addMood') {
+      const m = $('#newMood').value.trim();
+      if (!m) return;
+      if (MOODS.includes(m) || custom.includes(m)) { toast('已經有這個心情了'); return; }
+      await saveMoods([...custom, m]); return;
+    }
+    if (e.target.dataset?.cm) { await saveMoods(custom.filter(x => x !== e.target.dataset.cm)); return; }
     if (e.target.id === 'test') {
       const c = { url: $('#url').value.trim(), pass: $('#pass').value };
-      await kvSet('cfg', c);
+      await kvSet('cfg', c); gsOk = false;
       $('#res').textContent = '測試中…';
-      try { const r = await api('ping'); $('#res').textContent = '✅ ' + r.message; sync(); }
+      try {
+        const r = await api('ping');
+        $('#res').textContent = r.version === NEED_GS ? '✅ ' + r.message : `⚠️ ${r.message}，但雲端程式是 ${r.version || '舊版'}，要更新到 ${NEED_GS} 才會同步，日記先留在手機`;
+        sync(); await loadQuotes(true);
+      }
       catch (err) { $('#res').textContent = '⚠️ ' + err.message; }
     }
     if (e.target.id === 'now') { toast('同步中…'); await sync(); route(); }
@@ -421,7 +665,14 @@ async function uploadMedia(e, m, label) {
   throw new Error('上傳沒有完成，下次再試');
 }
 
-let syncing = false, syncAgain = false, retryTimer;
+let syncing = false, syncAgain = false, retryTimer, gsOk = false;
+/* Code.gs 只存它認得的欄位：不是 v3 就整個不同步，日記留在手機，新欄位才不會被蓋掉 */
+async function checkCloud() {
+  if (gsOk) return;
+  const r = await api('ping');
+  if (r.version !== NEED_GS) throw new Error(`雲端程式是 ${r.version || '舊版'}，要更新到 ${NEED_GS}，日記先留在手機`);
+  gsOk = true;
+}
 async function sync() {
   if (syncing) { syncAgain = true; return; }
   const cfg = await kvGet('cfg');
@@ -431,6 +682,8 @@ async function sync() {
   const attempt = async fn => { try { await fn(); } catch (e) { errs.push(e instanceof TypeError ? '連不上雲端' : e.message); } };
   const clean = async (id, rev) => { const c = await dbGet('entries', id); if (c && c.rev === rev) await dbPut('entries', { ...c, dirty: false }); };
   const pendingOf = async e => { const r = []; for (const m of e.media) if (!m.fileId && await dbGet('blobs', m.id)) r.push(m); return r; };
+  await attempt(checkCloud);
+  if (gsOk) {
   // 第一段：全部文字先上去，一篇失敗不影響其他篇
   for (const snap of (await dbAll('entries')).filter(x => x.dirty)) await attempt(async () => {
     if (snap.deleted) { await api('delete', { id: snap.id }); await dbDel('entries', snap.id); return; }
@@ -457,12 +710,14 @@ async function sync() {
         if (local?.dirty) continue;
         if (s.deleted) { await dbDel('entries', s.id); continue; }
         const thumbs = Object.fromEntries((local?.media || []).map(m => [m.id, m.thumb]));
-        await dbPut('entries', { ...s, media: s.media.map(m => ({ ...m, thumb: thumbs[m.id] })), dirty: false, rev: local?.rev || 0 });
+        await dbPut('entries', { ...local, ...s, media: s.media.map(m => ({ ...m, thumb: thumbs[m.id] })), dirty: false, rev: local?.rev || 0 });   // 雲端沒有的欄位留手機的
       }
       since = r.since; more = r.more;
       await kvSet('since', since);
     }
   });
+  await loadQuotes();
+  }
   const error = errs[0] || '';
   await kvSet('lastSync', { at: Date.now(), error });
   syncing = false; keepAwake(false);
@@ -477,7 +732,7 @@ async function sync() {
 async function takeShared() {
   const items = await dbAll('shared');
   if (!items.length) return;
-  const draft = (await kvGet('draft')) || newDraft();
+  const draft = fill((await kvGet('draft')) || {});
   const files = items.filter(i => i.file).map(i => i.file);
   const text = items.filter(i => i.text).map(i => i.text).join('\n');
   if (text) draft.text = draft.text ? draft.text + '\n' + text : text;
@@ -489,7 +744,7 @@ async function takeShared() {
 /* ---------------- 頁面切換 ---------------- */
 async function route() {
   const h = location.hash || '#today';
-  if (listening) stopMic();
+  await stopVoice();   // 換頁前收好錄音，才不會掉
   const tab = h.startsWith('#e/') ? 'list' : h.slice(1);
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   if (h.startsWith('#e/')) await renderEntry(decodeURIComponent(h.slice(3)));
@@ -500,10 +755,13 @@ async function route() {
 }
 addEventListener('hashchange', route);
 addEventListener('online', sync);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (wakeCount && !wake) keepAwake(true).then(() => { wakeCount--; }); sync(); } });
+addEventListener('pagehide', () => { stopVoice(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopVoice(); /* 來電、切 App 被收掉前先把錄音存進草稿 */ else { if (wakeCount && !wake) keepAwake(true).then(() => { wakeCount--; }); sync(); } });
 (async () => {
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
   navigator.storage?.persist?.();
+  view.addEventListener('focusin', e => { if (e.target.matches?.('textarea, #thanks input')) micTarget = e.target; });   // 語音進最後點的框
+  setQuotes(await kvGet('quotes'));
   if (location.search.includes('shared')) { await takeShared(); history.replaceState(null, '', './#today'); }
   await route();
   sync();
