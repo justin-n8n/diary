@@ -1,11 +1,11 @@
-/* 阿輝的心情日誌（repo 名 diary）v0.2.0：今天（小語、心情方塊、問題、自由日記、語音三模式、心情、四它、安安、感恩、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
-const APP_VERSION = '0.2.0';
+/* 阿輝的心情日誌（repo 名 diary）v0.2.1：今天（小語、心情方塊、問題、自由日記、語音兩模式、心情、四它、安安、感恩、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
+const APP_VERSION = '0.2.1';
 const NEED_GS = 'v3';            // 新欄位要 Code.gs v3 才存得住
 const CHUNK = 8 * 1024 * 1024;   // 一塊 8 MiB（要是 256 KiB 的倍數）
 const MOODS = ['平靜', '歡喜', '感恩', '煩躁', '焦慮', '疲累', '低落'];
 const MOOD_GOOD = ['歡喜', '感恩'], MOOD_LOW = ['煩躁', '焦慮', '疲累', '低落'];
 const FOUR_ITS = ['面對它', '接受它', '處理它', '放下它'];
-const VOICE_MODES = [['both', '錄音＋轉文字'], ['text', '只轉文字'], ['audio', '只錄音']];
+const VOICE_MODES = [['text', '只轉文字'], ['audio', '只錄音']];   // 11/6 真手機：錄音和轉文字不能同時用，而且不會報錯，所以不提供
 const QUOTES_DAYS = 7;           // 幾天向雲端確認一次句庫
 const $ = (s, r = document) => r.querySelector(s);
 const view = $('#view');
@@ -112,10 +112,10 @@ async function getDraft() {
   return d;
 }
 
-/* ---------------- 語音：錄音（MediaRecorder）＋轉文字（Web Speech），三種模式 ---------------- */
+/* ---------------- 語音：只轉文字（Web Speech）或只錄音（MediaRecorder） ---------------- */
 const MIC_HELP = '請打開麥克風權限：用 Chrome 開這個網址 → 網址列左邊的圖示 → 權限 → 麥克風 →「允許」。如果還是不行：手機的「設定 → 應用程式 → Chrome → 權限 → 麥克風」也要允許。改完把 App 關掉重開。';
 let recog = null, recorder = null, recording = false, recogFailed = false, starting = false, stopped = null, stopWait = null, voiceSeq = 0, slowTimer;
-let vmode = 'both', micTarget = null;
+let vmode = 'text', micTarget = null;
 const note = m => { const n = $('#interim'); if (n) n.textContent = m; };
 const micFail = m => { const n = $('#interim'); if (n) n.innerHTML = `<div class="help">⚠️ ${esc(m)}<br>${esc(MIC_HELP)}</div>`; };
 const micErr = e => ({ NotAllowedError: '麥克風權限沒有允許。', NotFoundError: '找不到麥克風。', NotReadableError: '麥克風被別的 App 佔用中（例如通話、錄音）。' }[e.name] || '無法使用麥克風：' + (e.message || e.name));
@@ -128,7 +128,7 @@ function appendTo(el, t) {
 }
 function startRecog() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { recogFailed = true; note(vmode === 'text' ? '這支手機不支援語音轉文字，請用鍵盤上的麥克風。' : '這支手機不支援語音轉文字，這次只錄音。'); if (vmode === 'text') stopVoice(); return; }
+  if (!SR) { recogFailed = true; note('這支手機不支援語音轉文字，請用鍵盤上的麥克風。'); stopVoice(); return; }
   recog = new SR(); recog.lang = 'zh-TW'; recog.continuous = true; recog.interimResults = true;
   recog.onresult = e => {
     let interim = '';
@@ -142,12 +142,12 @@ function startRecog() {
     if (e.error === 'no-speech' || e.error === 'aborted') return;
     recogFailed = true;
     const m = { network: '沒有網路，無法轉文字。', 'not-allowed': '沒有麥克風權限。', 'service-not-allowed': '這支手機不允許語音轉文字。',
-      'audio-capture': '麥克風被錄音佔用，無法同時轉文字。可以改成「只轉文字」或「只錄音」。' }[e.error] || '轉文字發生問題：' + e.error;
-    if (/allowed/.test(e.error)) micFail(m); else note(m + (vmode === 'both' ? '（錄音照常）' : ''));
-    if (vmode === 'text') stopVoice();   // 只轉文字時沒東西在收音了，不要讓人以為還在聽
+      'audio-capture': '麥克風被別的 App 佔用中。' }[e.error] || '轉文字發生問題：' + e.error;
+    if (/allowed/.test(e.error)) micFail(m); else note(m);
+    stopVoice();   // 沒東西在收音了，不要讓人以為還在聽
   };
   recog.onend = () => { if (recording && !recogFailed) { try { recog.start(); } catch (_) { /* 已在跑 */ } } };
-  try { recog.start(); } catch (e) { recogFailed = true; note('轉文字無法開始：' + e.message); if (vmode === 'text') stopVoice(); }
+  try { recog.start(); } catch (e) { recogFailed = true; note('轉文字無法開始：' + e.message); stopVoice(); }
 }
 /* 同一時間只准一個麥克風請求：voiceSeq 變了就代表這次請求作廢，晚到的只收掉自己拿到的麥克風 */
 async function startVoice(draft) {
@@ -304,7 +304,7 @@ async function renderToday() {
   const s = stats(entries);
   const wrote = entries.filter(e => e.date === localDate() && !e.deleted).length;
   const cfg = await kvGet('cfg');
-  vmode = (await kvGet('voiceMode')) || 'both';
+  vmode = (await kvGet('voiceMode')) === 'audio' ? 'audio' : 'text';   // 舊的 both 改成只轉文字
   const custom = (await kvGet('customMoods')) || [];
   const moods = [...new Set([...MOODS, ...custom, ...draft.moods])];
   const edit = !!draft.editId;
