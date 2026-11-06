@@ -1,5 +1,5 @@
-/* 小輝日記 v0.1.0：今天（問題、語音、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
-const APP_VERSION = '0.1.1';
+/* 小輝日記 v0.1.2：今天（問題、語音、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
+const APP_VERSION = '0.1.2';
 const CHUNK = 8 * 1024 * 1024;   // 一塊 8 MiB（要是 256 KiB 的倍數）
 const MAIN_Q = '今天最想面對的一件事？';
 const BANK = [
@@ -40,7 +40,12 @@ function newDraft() {
   const date = localDate();
   return { date, shift: 0, q: questionFor(date), text: '', accept: '', handle: '', letgo: '', anan: '', private: false, media: [] };
 }
+/* 今天的草稿和修改舊篇分開放，修改舊篇不會蓋掉今天寫到一半的內容 */
+const keepDraft = d => kvSet(d.editId ? 'editDraft' : 'draft', d);
+const dropDraft = d => kvDel(d.editId ? 'editDraft' : 'draft');
 async function getDraft() {
+  const edit = await kvGet('editDraft');
+  if (edit) return edit;
   let d = await kvGet('draft');
   if (!d) return newDraft();
   // 昨天沒寫完的草稿，內容留著，日期跟著今天；修改舊日記的不動
@@ -86,7 +91,7 @@ let wake = null, wakeCount = 0;
 async function keepAwake(on) {
   wakeCount = Math.max(0, wakeCount + (on ? 1 : -1));
   try {
-    if (wakeCount && !wake) wake = await navigator.wakeLock?.request('screen');
+    if (wakeCount && !wake) { wake = await navigator.wakeLock?.request('screen'); if (wake) wake.onrelease = () => { wake = null; }; }
     if (!wakeCount && wake) { await wake.release(); wake = null; }
   } catch (_) { wake = null; }
 }
@@ -128,7 +133,7 @@ async function addFiles(files, draft) {
     draft.media.push({ id, name: f.name || `${id}.${kind === 'video' ? 'mp4' : 'jpg'}`, mime: f.type, size: f.size, kind, thumb: await makeThumb(f), fileId: '' });
   }
   if (bad) toast('只能放照片和影片');
-  await kvSet('draft', draft);
+  await keepDraft(draft);
 }
 function tile(m, canRemove) {
   const inner = m.thumb ? `<img src="${esc(m.thumb)}" alt="">` : (m.kind === 'video' ? '🎬' : '🖼️');
@@ -175,7 +180,7 @@ async function renderToday() {
     ${draft.editId ? '<button class="btn wide" id="cancel">不改了</button>' : ''}`;
 
   let timer;
-  const keep = () => { clearTimeout(timer); timer = setTimeout(() => kvSet('draft', draft), 300); };
+  const keep = () => { clearTimeout(timer); timer = setTimeout(() => keepDraft(draft), 300); };
   micTarget = $('#text');
   view.oninput = e => {
     const f = e.target.dataset?.f;
@@ -200,15 +205,21 @@ async function renderToday() {
     if (rm) {
       draft.media = draft.media.filter(m => m.id !== rm);
       if (!draft.editId) await dbDel('blobs', rm);
-      await kvSet('draft', draft);
+      await keepDraft(draft);
       $('#grid').innerHTML = draft.media.map(m => tile(m, true)).join('');
       return;
     }
-    if (e.target.id === 'cancel') { await kvDel('draft'); location.hash = '#e/' + draft.editId; return; }
+    if (e.target.id === 'cancel') { clearTimeout(timer); await dropDraft(draft); location.hash = '#e/' + draft.editId; return; }
     if (e.target.id === 'save') { stopMic(); clearTimeout(timer); await saveDraft(draft); }
   };
 }
+let saving = false;
 async function saveDraft(d) {
+  if (saving) return;   // 連按兩下只存一篇
+  saving = true;
+  try { await doSave(d); } finally { saving = false; }
+}
+async function doSave(d) {
   if (![d.text, d.accept, d.handle, d.letgo, d.anan].some(x => x.trim()) && !d.media.length) { toast('講一句話再存'); return; }
   const now = new Date();
   const old = d.editId ? await dbGet('entries', d.editId) : null;
@@ -217,7 +228,7 @@ async function saveDraft(d) {
     text: d.text, accept: d.accept, handle: d.handle, letgo: d.letgo, anan: d.anan, private: d.private, media: d.media,
     dirty: true, rev: (old?.rev || 0) + 1 };
   await dbPut('entries', e);
-  await kvDel('draft');
+  await dropDraft(d);
   toast('寫好了 🙏');
   location.hash = '#list';
   sync();
@@ -266,7 +277,7 @@ async function renderEntry(id) {
   view.oninput = view.onchange = null;
   view.onclick = async ev => {
     if (ev.target.id === 'edit') {
-      await kvSet('draft', { editId: e.id, date: e.date, shift: 0, q: e.q, text: e.text, accept: e.accept, handle: e.handle, letgo: e.letgo, anan: e.anan, private: e.private, media: e.media });
+      await kvSet('editDraft', { editId: e.id, date: e.date, shift: 0, q: e.q, text: e.text, accept: e.accept, handle: e.handle, letgo: e.letgo, anan: e.anan, private: e.private, media: e.media });
       location.hash = '#today';
     }
     if (ev.target.id === 'del' && confirm('刪除這篇？雲端的檔案會移到「已刪除」資料夾，不會真的消失。')) {
@@ -348,7 +359,11 @@ const toBase64 = blob => new Promise((res, rej) => {
 
 /** 手機直傳一塊；回傳 {done,fileId,offset}。瀏覽器不准（CORS）或斷線時丟 TypeError。 */
 async function putDirect(url, blob, start, end, total) {
-  const r = await fetch(url, { method: 'PUT', headers: { 'Content-Range': `bytes ${start}-${end - 1}/${total}` }, body: blob.slice(start, end) });
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), 180000);   // 卡死時不要讓同步永遠停住
+  let r;
+  try { r = await fetch(url, { method: 'PUT', headers: { 'Content-Range': `bytes ${start}-${end - 1}/${total}` }, body: blob.slice(start, end), signal: ctl.signal }); }
+  catch (e) { if (e.name === 'AbortError') throw new Error('上傳等太久沒有回應'); throw e; }
+  finally { clearTimeout(t); }
   if (r.status === 200 || r.status === 201) return { done: true, fileId: (await r.json()).id };
   if (r.status === 308) {
     const m = /bytes=0-(\d+)/.exec(r.headers.get('Range') || '');
@@ -412,18 +427,28 @@ async function sync() {
   const cfg = await kvGet('cfg');
   if (!cfg?.url || !navigator.onLine) return;
   syncing = true; keepAwake(true);
-  let error = '';
-  try {
-    for (const snap of (await dbAll('entries')).filter(x => x.dirty)) {
-      if (snap.deleted) { await api('delete', { id: snap.id }); await dbDel('entries', snap.id); continue; }
-      await api('save', { entry: serverCopy(snap) });   // 文字先上去，影片傳失敗也不怕
-      const todo = snap.media.filter(m => !m.fileId);
-      for (let i = 0; i < todo.length; i++) await uploadMedia(snap, todo[i], `上傳照片影片 ${i + 1}/${todo.length}`);
-      const cur = await dbGet('entries', snap.id);
-      if (!cur) continue;
-      if (todo.length) await api('save', { entry: serverCopy(cur) });
-      if (cur.rev === snap.rev) await dbPut('entries', { ...cur, dirty: false });
-    }
+  const errs = [];
+  const attempt = async fn => { try { await fn(); } catch (e) { errs.push(e instanceof TypeError ? '連不上雲端' : e.message); } };
+  const clean = async (id, rev) => { const c = await dbGet('entries', id); if (c && c.rev === rev) await dbPut('entries', { ...c, dirty: false }); };
+  const pendingOf = async e => { const r = []; for (const m of e.media) if (!m.fileId && await dbGet('blobs', m.id)) r.push(m); return r; };
+  // 第一段：全部文字先上去，一篇失敗不影響其他篇
+  for (const snap of (await dbAll('entries')).filter(x => x.dirty)) await attempt(async () => {
+    if (snap.deleted) { await api('delete', { id: snap.id }); await dbDel('entries', snap.id); return; }
+    await api('save', { entry: serverCopy(snap) });
+    if (!(await pendingOf(snap)).length) await clean(snap.id, snap.rev);
+  });
+  // 第二段：照片影片，新的先傳
+  const waiting = (await dbAll('entries')).filter(x => x.dirty && !x.deleted).sort((x, y) => String(y.at).localeCompare(String(x.at)));
+  for (const snap of waiting) await attempt(async () => {
+    const todo = await pendingOf(snap);
+    for (let i = 0; i < todo.length; i++) await uploadMedia(snap, todo[i], `上傳照片影片 ${i + 1}/${todo.length}`);
+    const cur = await dbGet('entries', snap.id);
+    if (!cur) return;
+    await api('save', { entry: serverCopy(cur) });
+    await clean(cur.id, snap.rev);
+  });
+  // 第三段：抓另一台的新內容
+  await attempt(async () => {
     let since = (await kvGet('since')) || '', more = true;
     while (more) {
       const r = await api('pull', { since });
@@ -437,12 +462,14 @@ async function sync() {
       since = r.since; more = r.more;
       await kvSet('since', since);
     }
-  } catch (e) { error = e instanceof TypeError ? '連不上雲端' : e.message; }
+  });
+  const error = errs[0] || '';
   await kvSet('lastSync', { at: Date.now(), error });
   syncing = false; keepAwake(false);
   bar(error ? `⚠️ ${error}，等一下會再試` : '');
   if (error) { clearTimeout(retryTimer); retryTimer = setTimeout(sync, 60000); }
-  if (!error && !location.hash.startsWith('#today') && !location.hash.startsWith('#settings')) route();
+  const here = location.hash || '#today';
+  if (!error && !here.startsWith('#today') && !here.startsWith('#settings')) route();
   if (syncAgain) { syncAgain = false; sync(); }
 }
 
@@ -450,12 +477,11 @@ async function sync() {
 async function takeShared() {
   const items = await dbAll('shared');
   if (!items.length) return;
-  const draft = await getDraft();
+  const draft = (await kvGet('draft')) || newDraft();
   const files = items.filter(i => i.file).map(i => i.file);
   const text = items.filter(i => i.text).map(i => i.text).join('\n');
   if (text) draft.text = draft.text ? draft.text + '\n' + text : text;
   await addFiles(files, draft);
-  await kvSet('draft', draft);
   await dbClear('shared');
   toast(`收到 ${files.length} 個檔案`);
 }
@@ -474,7 +500,7 @@ async function route() {
 }
 addEventListener('hashchange', route);
 addEventListener('online', sync);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (wakeCount && !wake) keepAwake(true).then(() => { wakeCount--; }); sync(); } });
 (async () => {
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
   navigator.storage?.persist?.();

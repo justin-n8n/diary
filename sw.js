@@ -1,6 +1,6 @@
 /* 離線快取＋接收相簿分享。新增檔案時加進 FILES，並把 VERSION 加一。 */
 importScripts('db.js');
-const VERSION = 'diary-v0.1.1';
+const VERSION = 'diary-v0.1.2';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'db.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -9,7 +9,7 @@ self.addEventListener('install', e => {
     .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith('diary-') && k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 /* 從相簿按「分享 → 小輝日記」：把檔案收進資料庫，再打開今天那頁 */
