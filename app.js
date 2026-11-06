@@ -1,5 +1,5 @@
 /* 小輝日記 v0.1.0：今天（問題、語音、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.1.1';
 const CHUNK = 8 * 1024 * 1024;   // 一塊 8 MiB（要是 256 KiB 的倍數）
 const MAIN_Q = '今天最想面對的一件事？';
 const BANK = [
