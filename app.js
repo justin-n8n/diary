@@ -1,6 +1,6 @@
-/* 阿輝的心情日誌（repo 名 diary）v0.2.1：今天（小語、心情方塊、問題、自由日記、語音兩模式、心情、四它、安安、感恩、照片影片）、時間軸、設定。資料先存手機，有網路再送雲端。 */
-const APP_VERSION = '0.2.1';
-const NEED_GS = 'v3';            // 新欄位要 Code.gs v3 才存得住
+/* 阿輝的心情日誌（repo 名 diary）v0.3.0：今天（小語、心情方塊、問題、自由日記、語音兩模式、心情、四它、安安、感恩、照片影片；可選日期補寫）、時間軸、日曆、設定。資料先存手機，有網路再送雲端。 */
+const APP_VERSION = '0.3.0';
+const NEED_GS = 'v4';            // 改日期要 Code.gs v4 才會把本文搬到新日期的資料夾（v3 的新欄位 v4 也有）
 const CHUNK = 8 * 1024 * 1024;   // 一塊 8 MiB（要是 256 KiB 的倍數）
 const MOODS = ['平靜', '歡喜', '感恩', '煩躁', '焦慮', '疲累', '低落'];
 const MOOD_GOOD = ['歡喜', '感恩'], MOOD_LOW = ['煩躁', '焦慮', '疲累', '低落'];
@@ -98,6 +98,14 @@ const fill = d => {
   r.moods = [...(r.moods || [])];
   return r;
 };
+const hasContent = d => [d.text, d.ananMood, d.accept, d.handle, d.letgo, d.anan].some(x => String(x || '').trim())
+  || (d.thanks || []).some(t => String(t).trim()) || (d.moods || []).length > 0 || !!d.fourIt || (d.media || []).length > 0;
+/* 換日期（補寫）：picked 記住是自己選的，隔天打開不會被拉回今天；還沒寫字就換成那天的題目 */
+function setDraftDate(d, date) {
+  d.date = date;
+  d.picked = date !== localDate();
+  if (!d.editId && !String(d.text || '').trim()) { const n = questionFor(date); d.shift = 0; d.q = n.q; d.qcat = n.cat; }
+}
 /* 今天的草稿和修改舊篇分開放，修改舊篇不會蓋掉今天寫到一半的內容 */
 const keepDraft = d => kvSet(d.editId ? 'editDraft' : 'draft', d);
 const dropDraft = d => kvDel(d.editId ? 'editDraft' : 'draft');
@@ -107,8 +115,8 @@ async function getDraft() {
   const saved = await kvGet('draft');
   if (!saved) return newDraft();
   const d = fill(saved);
-  // 昨天沒寫完的草稿，內容留著，日期跟著今天；修改舊日記的不動
-  if (d.date !== localDate()) { d.date = localDate(); if (!d.text) { const n = questionFor(d.date); d.shift = 0; d.q = n.q; d.qcat = n.cat; } }
+  // 昨天沒寫完的草稿，內容留著，日期跟著今天；自己選了日期（補寫）的、修改舊日記的不動
+  if (d.date !== localDate() && !(d.picked && d.date < localDate())) { d.picked = false; d.date = localDate(); if (!d.text) { const n = questionFor(d.date); d.shift = 0; d.q = n.q; d.qcat = n.cat; } }
   return d;
 }
 
@@ -302,7 +310,8 @@ async function renderToday() {
   const draft = await getDraft();
   const entries = await dbAll('entries');
   const s = stats(entries);
-  const wrote = entries.filter(e => e.date === localDate() && !e.deleted).length;
+  const today = localDate(), back = draft.date !== today;
+  const wrote = entries.filter(e => e.date === draft.date && !e.deleted && e.id !== draft.editId).length;
   const cfg = await kvGet('cfg');
   vmode = (await kvGet('voiceMode')) === 'audio' ? 'audio' : 'text';   // 舊的 both 改成只轉文字
   const custom = (await kvGet('customMoods')) || [];
@@ -312,12 +321,14 @@ async function renderToday() {
   view.innerHTML = `
     <div class="top"><span class="cloud c1"></span><span class="cloud c2"></span><span class="cloud c3"></span>
       <div class="brand">阿輝的心情日誌</div>
-      <h1>${edit ? '修改 ' : ''}${esc(niceDate(draft.date))}</h1>
+      <h1>${edit ? '修改 ' : back ? '補寫 ' : ''}${esc(niceDate(draft.date))}</h1>
+      <label class="pick">📅 ${edit ? '改日期' : '寫哪一天'}<input type="date" id="dateIn" value="${esc(draft.date)}" max="${today}"></label>
       <p>近 14 天寫了 ${s.in14} 天・累積 ${s.total} 天</p>
       ${edit ? '' : `<div id="quoteBox"></div>${daysHtml(entries)}`}
     </div>
     <div class="under">
-    ${wrote && !edit ? `<p class="note">今天已經寫了 ${wrote} 篇，想再寫也可以。</p>` : ''}
+    ${back && !edit ? `<p class="note">📅 這篇是補寫，會算在 ${esc(niceDate(draft.date))}。<button class="link" id="backToday">改回今天</button></p>` : ''}
+    ${wrote && !edit ? `<p class="note">${back ? '這天' : '今天'}已經寫了 ${wrote} 篇，想再寫也可以。</p>` : ''}
     ${cfg?.url ? '' : '<p class="help">還沒連雲端，日記先存在手機。到「設定」填網址和密語就會送上去。</p>'}
     <div class="card">
       <span class="cat" id="qcat">${esc(draft.qcat)}</span>${edit ? '' : '<button class="link next" id="nextQ">換一題</button>'}
@@ -373,8 +384,16 @@ async function renderToday() {
     if (e.target.dataset?.i !== undefined) { draft.thanks[Number(e.target.dataset.i)] = e.target.value; keep(); }
     if (e.target.id === 'priv') { draft.private = e.target.checked; keep(); }
   };
+  const moveTo = async date => { clearTimeout(timer); setDraftDate(draft, date); await keepDraft(draft); await renderToday(); };
   view.onchange = async e => {
     if (e.target.id === 'priv') { draft.private = e.target.checked; keep(); }
+    if (e.target.id === 'dateIn') {
+      const v = e.target.value;
+      if (recording || starting) { e.target.value = draft.date; toast('先按「說完了」再換日期'); return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(v) || v > localDate()) { e.target.value = draft.date; toast('只能選今天或以前的日子'); return; }
+      if (v !== draft.date) await moveTo(v);
+      return;
+    }
     if (e.target.id === 'pick') {
       const n = e.target.files.length; if (!n) return;
       toast(`正在放進 ${n} 個檔案…`);
@@ -386,6 +405,7 @@ async function renderToday() {
   view.onclick = async e => {
     if (e.target.id === 'micBtn') { recording ? stopVoice() : startVoice(draft); return; }
     if (e.target.id === 'nextQuote') { quoteI = (quoteI + 1) % 3; paintQuote(); return; }
+    if (e.target.id === 'backToday') { if (recording || starting) { toast('先按「說完了」再換日期'); return; } await moveTo(localDate()); return; }
     if (e.target.id === 'nextQ') {
       draft.shift++;
       const n = questionFor(draft.date, draft.shift);
@@ -435,7 +455,8 @@ async function saveDraft(d) {
 }
 async function doSave(d) {
   const thanks = d.thanks.map(t => t.trim()).filter(Boolean);   // 空的不存
-  if (![d.text, d.ananMood, d.accept, d.handle, d.letgo, d.anan].some(x => x.trim()) && !thanks.length && !d.moods.length && !d.fourIt && !d.media.length) { toast('寫一點或選個心情再存'); return; }
+  if (!hasContent(d)) { toast('寫一點或選個心情再存'); return; }
+  if (d.date > localDate()) { toast('只能存今天或以前的日子'); return; }
   const now = new Date();
   const old = d.editId ? await dbGet('entries', d.editId) : null;
   for (const m of d.media) { const o = old?.media.find(x => x.id === m.id); if (o?.fileId) m.fileId = o.fileId; }
@@ -456,14 +477,15 @@ function preview(e) {
     || (auds(e.media).length && !pics(e.media).length ? '（錄音）' : '（照片影片）');
 }
 const tags = e => [...(e.moods || []).map(m => `<span class="tag2 ${moodClass([m])}">${esc(m)}</span>`), e.fourIt ? `<span class="tag2">🪷 ${esc(e.fourIt)}</span>` : ''].join('');
+const itemHtml = e => `<a class="card item" href="#e/${esc(e.id)}"><div class="meta">${esc(e.time)}${e.private ? '・🔒 不給小輝看' : ''}${e.dirty ? '・⏳ 還沒送上雲端' : ''}</div>
+      <div class="pv">${esc(preview(e))}</div>${tags(e) ? `<div class="tags">${tags(e)}</div>` : ''}${e.media.length ? `<div class="grid">${e.media.slice(0, 4).map(m => tile(m, false).replace(/<a [^>]*>|<\/a>/g, '')).join('')}</div>` : ''}</a>`;
 async function renderList() {
   const list = (await dbAll('entries')).filter(e => !e.deleted).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
   if (!list.length) { view.innerHTML = '<div class="head"><h1>時間軸</h1></div><p class="muted">還沒有日記。到「今天」講一段就有了。</p>'; return; }
   let html = '<div class="head"><h1>時間軸</h1></div>', day = '';
   for (const e of list) {
     if (e.date !== day) { day = e.date; html += `<div class="day">${esc(niceDate(day))}<span class="muted small">　${esc(day.slice(0, 4))}</span></div>`; }
-    html += `<a class="card item" href="#e/${esc(e.id)}"><div class="meta">${esc(e.time)}${e.private ? '・🔒 不給小輝看' : ''}${e.dirty ? '・⏳ 還沒送上雲端' : ''}</div>
-      <div class="pv">${esc(preview(e))}</div>${tags(e) ? `<div class="tags">${tags(e)}</div>` : ''}${e.media.length ? `<div class="grid">${e.media.slice(0, 4).map(m => tile(m, false).replace(/<a [^>]*>|<\/a>/g, '')).join('')}</div>` : ''}</a>`;
+    html += itemHtml(e);
   }
   view.innerHTML = html;
   view.onclick = view.oninput = view.onchange = null;
@@ -486,6 +508,61 @@ async function loadThumbs(list) {
   } catch (_) { /* 下次打開再抓 */ }
   thumbBusy = false;
 }
+/* ---------------- 日曆：一個月一頁，顏色跟 14 天方塊同一套；點一天看那天的日記，沒寫的可以補寫 ---------------- */
+let calSel = '';
+async function renderCal(ym) {
+  const today = localDate(), cur = today.slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(ym || '') || ym > cur) ym = cur;
+  const byDay = {};
+  for (const e of await dbAll('entries')) if (!e.deleted) (byDay[e.date] ||= []).push(e);
+  const [y, m] = ym.split('-').map(Number);
+  const startDow = new Date(y, m - 1, 1).getDay(), n = new Date(y, m, 0).getDate();
+  const prev = localDate(new Date(y, m - 2, 1)).slice(0, 7), next = localDate(new Date(y, m, 1)).slice(0, 7);
+  if (!calSel.startsWith(ym)) calSel = ym === cur ? today : '';
+  let cells = [...'日一二三四五六'].map(w => `<b>${w}</b>`).join('') + '<i></i>'.repeat(startDow), wrote = 0;
+  for (let d = 1; d <= n; d++) {
+    const key = `${ym}-${pad(d)}`, list = byDay[key];
+    if (list) wrote++;
+    const last = list && list.reduce((a, b) => String(b.at) > String(a.at) ? b : a);
+    cells += `<button type="button" class="cd ${last ? moodClass(last.moods) : ''}${key === today ? ' today' : ''}${key === calSel ? ' sel' : ''}" data-day="${key}" ${key > today ? 'disabled' : ''}
+      aria-label="${esc(niceDate(key))}${list ? `，寫了 ${list.length} 篇` : ''}">${d}</button>`;
+  }
+  view.innerHTML = `<div class="head calhead"><a class="btn" href="#cal/${prev}" aria-label="上個月">‹</a>
+      <h1>${y} 年 ${m} 月</h1><a class="btn${ym === cur ? ' off' : ''}" href="#cal/${next}" aria-label="下個月">›</a></div>
+    <div class="card"><p class="muted small" style="margin-top:0">這個月寫了 ${wrote} 天</p>
+      <div class="cal">${cells}</div>
+      <div class="legend cleg"><span><b class="g"></b>好</span><span><b class="m"></b>普通</span><span><b class="l"></b>低落</span><span><b></b>沒寫</span></div></div>
+    <div id="dayBox"></div>`;
+  const paintDay = async key => {
+    const box = $('#dayBox'); if (!box) return;
+    if (!key) { box.innerHTML = '<p class="muted small">點一天看那天的日記，沒寫的日子可以補寫。</p>'; return; }
+    const list = (byDay[key] || []).sort((a, b) => a.time.localeCompare(b.time));
+    box.innerHTML = `<div class="day">${esc(niceDate(key))}</div>${list.map(itemHtml).join('') || '<p class="muted small">這天還沒寫。</p>'}
+      <button class="btn primary wide" id="writeDay" data-day="${key}">✍️ ${key === today ? '寫今天的日記' : list.length ? '這天再寫一篇' : '補寫這天'}</button>`;
+    loadThumbs(list);
+  };
+  paintDay(calSel);
+  view.oninput = view.onchange = null;
+  view.onclick = async ev => {
+    const btn = ev.target.closest?.('[data-day]'); if (!btn) return;
+    const key = btn.dataset.day;
+    if (btn.id === 'writeDay') { await writeOn(key); return; }
+    calSel = key;
+    document.querySelectorAll('.cal .cd').forEach(b => b.classList.toggle('sel', b.dataset.day === key));
+    paintDay(key);
+  };
+}
+/* 從日曆去寫某一天：草稿寫到一半的，內容跟著過去，先問一聲 */
+async function writeOn(date) {
+  if (date > localDate()) return;
+  if (await kvGet('editDraft')) { toast('有一篇日記修改到一半，先存好或按「不改了」'); location.hash = '#today'; return; }
+  const saved = await kvGet('draft'), d = saved ? fill(saved) : newDraft();
+  if (d.date !== date && hasContent(d) && !confirm(`還有一篇沒存的草稿（${niceDate(d.date)}），要改成寫 ${niceDate(date)} 嗎？已寫的內容會留著。`)) return;
+  setDraftDate(d, date);
+  await kvSet('draft', d);
+  location.hash = '#today';
+}
+
 async function renderEntry(id) {
   const e = await dbGet('entries', id);
   if (!e || e.deleted) { location.hash = '#list'; return; }
@@ -745,10 +822,11 @@ async function takeShared() {
 async function route() {
   const h = location.hash || '#today';
   await stopVoice();   // 換頁前收好錄音，才不會掉
-  const tab = h.startsWith('#e/') ? 'list' : h.slice(1);
+  const tab = h.startsWith('#e/') ? 'list' : h.startsWith('#cal') ? 'cal' : h.slice(1);
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   if (h.startsWith('#e/')) await renderEntry(decodeURIComponent(h.slice(3)));
   else if (h === '#list') await renderList();
+  else if (h.startsWith('#cal')) await renderCal(h.slice(5));
   else if (h === '#settings') await renderSettings();
   else await renderToday();
   scrollTo(0, 0);
