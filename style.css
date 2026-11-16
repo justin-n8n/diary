@@ -118,3 +118,20 @@ ol.body { white-space: normal; padding-left: 22px; margin: 0; }
 .cd:disabled { opacity: .35; cursor: default; }
 .cleg b { background: var(--pale); } .cleg b.m { background: #fff; box-shadow: inset 0 0 0 2px var(--sky2); }
 .help { background: #fff; border-radius: 10px; padding: 8px 10px; font-size: 14px; margin: 6px 0 12px; box-shadow: 0 3px 12px rgba(50, 120, 170, .12); }
+
+/* ❓ 說明（v0.3.1）：內容由 47 號 文件說明/ 的 .md 產生 */
+.helplink { text-align: center; margin: 14px 0 4px; font-size: 14px; }
+.helplink a { color: var(--muted); }
+.modes a { flex: 1; min-height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 20px; background: var(--card); color: var(--accent); font-size: 14px; text-decoration: none; }
+.modes a.on { background: var(--sky); color: #fff; }
+.head a.btn.small { min-height: 34px; padding: 4px 12px; font-size: 14px; text-decoration: none; }
+.card .row a.btn { text-decoration: none; }
+.doc { margin-top: 12px; font-size: 15px; overflow-wrap: anywhere; }
+.doc h1 { font-size: 20px; color: var(--accent); }
+.doc h2 { color: var(--accent); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 24px; }
+.doc blockquote { margin: 8px 0; padding: 8px 12px; background: var(--pale); border-left: 4px solid var(--sky); color: var(--muted); font-size: 14px; }
+.doc table { border-collapse: collapse; width: 100%; font-size: 14px; display: block; overflow-x: auto; }
+.doc th, .doc td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; min-width: 5em; }
+.doc th { background: var(--pale); }
+.doc code { background: var(--pale); border-radius: 4px; padding: 0 4px; font-size: .9em; }
+.doc ul, .doc ol { padding-left: 1.3em; }

@@ -1,5 +1,5 @@
 /* 阿輝的心情日誌（repo 名 diary）v0.3.0：今天（小語、心情方塊、問題、自由日記、語音兩模式、心情、四它、安安、感恩、照片影片；可選日期補寫）、時間軸、日曆、設定。資料先存手機，有網路再送雲端。 */
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.3.1';
 const NEED_GS = 'v4';            // 改日期要 Code.gs v4 才會把本文搬到新日期的資料夾（v3 的新欄位 v4 也有）
 const CHUNK = 8 * 1024 * 1024;   // 一塊 8 MiB（要是 256 KiB 的倍數）
 const MOODS = ['平靜', '歡喜', '感恩', '煩躁', '焦慮', '疲累', '低落'];
@@ -371,6 +371,7 @@ async function renderToday() {
     </div>
     <button class="btn primary wide save" id="save">${edit ? '存好修改' : '存起來'}</button>
     ${edit ? '<button class="btn wide" id="cancel">不改了</button>' : ''}
+    <p class="helplink"><a href="#help">❓ 說明：怎麼用、怎麼維護</a></p>
     </div>`;
   paintQuote();
   paintAudio(draft);
@@ -603,6 +604,8 @@ async function renderSettings() {
   const est = await navigator.storage?.estimate?.();
   const custom = (await kvGet('customMoods')) || [];
   view.innerHTML = `<div class="head"><h1>設定</h1><span class="muted small">v${APP_VERSION}</span></div>
+    <div class="card"><h2 style="margin-top:0">❓ 說明</h2>
+      <div class="row"><a class="btn" href="#help/use">📖 使用說明</a><a class="btn" href="#help/maint">🛠️ 維護說明</a></div></div>
     <div class="card"><h2 style="margin-top:0">自訂心情</h2>
       <p class="muted small">加進「今天的心情」，方塊算普通。</p>
       <div class="chips" id="cm">${custom.map(m => `<button type="button" class="chip on" data-cm="${esc(m)}">${esc(m)} ✕</button>`).join('')}</div>
@@ -818,16 +821,29 @@ async function takeShared() {
   toast(`收到 ${files.length} 個檔案`);
 }
 
+/* ---------------- ❓ 說明（v0.3.1）：內容在 help.js，由 47 號 文件說明/ 的 .md 產生（程式/工具/產生說明網頁.py），不要手改 ---------------- */
+async function renderHelp(which) {
+  if (which !== 'use' && which !== 'maint') which = (await kvGet('helpTab')) === 'maint' ? 'maint' : 'use';
+  await kvSet('helpTab', which);
+  const has = typeof HELP === 'object' && HELP[which];
+  view.innerHTML = `<div class="head"><h1>說明</h1><a class="btn small" href="#settings">← 回設定</a></div>
+    <div class="modes">${[['use', '📖 使用說明'], ['maint', '🛠️ 維護說明']].map(([k, l]) => `<a class="${k === which ? 'on' : ''}" href="#help/${k}">${l}</a>`).join('')}</div>
+    <div class="card doc">${has ? HELP[which] : '<p>說明還沒載入，連上網路再打開一次。</p>'}</div>
+    <p class="muted small" style="text-align:center">阿輝的心情日誌 v${APP_VERSION}</p>`;
+  view.onclick = view.oninput = view.onchange = null;
+}
+
 /* ---------------- 頁面切換 ---------------- */
 async function route() {
   const h = location.hash || '#today';
   await stopVoice();   // 換頁前收好錄音，才不會掉
-  const tab = h.startsWith('#e/') ? 'list' : h.startsWith('#cal') ? 'cal' : h.slice(1);
+  const tab = h.startsWith('#e/') ? 'list' : h.startsWith('#cal') ? 'cal' : h.startsWith('#help') ? 'settings' : h.slice(1);
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   if (h.startsWith('#e/')) await renderEntry(decodeURIComponent(h.slice(3)));
   else if (h === '#list') await renderList();
   else if (h.startsWith('#cal')) await renderCal(h.slice(5));
   else if (h === '#settings') await renderSettings();
+  else if (h.startsWith('#help')) await renderHelp(h.slice(6));
   else await renderToday();
   scrollTo(0, 0);
 }

@@ -1,7 +1,7 @@
 /* 離線快取＋接收相簿分享。新增檔案時加進 FILES，並把 VERSION 加一。 */
 importScripts('db.js');
-const VERSION = 'diary-v0.3.0-icon1';
-const FILES = ['./', 'index.html', 'style.css', 'app.js', 'questions.js', 'db.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
+const VERSION = 'diary-v0.3.1';
+const FILES = ['./', 'index.html', 'style.css', 'app.js', 'questions.js', 'help.js', 'db.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION)
