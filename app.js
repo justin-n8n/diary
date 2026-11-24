@@ -1,6 +1,6 @@
 /* 阿輝的心情日誌（repo 名 diary）v0.3.0：今天（小語、心情方塊、問題、自由日記、語音兩模式、心情、四它、安安、感恩、照片影片；可選日期補寫）、時間軸、日曆、設定。資料先存手機，有網路再送雲端。 */
-const APP_VERSION = '0.3.1';
-const NEED_GS = 'v4';            // 改日期要 Code.gs v4 才會把本文搬到新日期的資料夾（v3 的新欄位 v4 也有）
+const APP_VERSION = '0.6.0';
+const NEED_GS = 'v5';            // v0.6.0 生活日曆要 Code.gs v5（lifeSync、lifeMonth）；v4 的改日期、v3 的欄位 v5 都有
 const CHUNK = 8 * 1024 * 1024;   // 一塊 8 MiB（要是 256 KiB 的倍數）
 const MOODS = ['平靜', '歡喜', '感恩', '煩躁', '焦慮', '疲累', '低落'];
 const MOOD_GOOD = ['歡喜', '感恩'], MOOD_LOW = ['煩躁', '焦慮', '疲累', '低落'];
@@ -327,6 +327,7 @@ async function renderToday() {
       ${edit ? '' : `<div id="quoteBox"></div>${daysHtml(entries)}`}
     </div>
     <div class="under">
+    ${edit ? '' : '<div id="annivTop"></div>'}
     ${back && !edit ? `<p class="note">📅 這篇是補寫，會算在 ${esc(niceDate(draft.date))}。<button class="link" id="backToday">改回今天</button></p>` : ''}
     ${wrote && !edit ? `<p class="note">${back ? '這天' : '今天'}已經寫了 ${wrote} 篇，想再寫也可以。</p>` : ''}
     ${cfg?.url ? '' : '<p class="help">還沒連雲端，日記先存在手機。到「設定」填網址和密語就會送上去。</p>'}
@@ -532,17 +533,20 @@ async function renderCal(ym) {
       <h1>${y} 年 ${m} 月</h1><a class="btn${ym === cur ? ' off' : ''}" href="#cal/${next}" aria-label="下個月">›</a></div>
     <div class="card"><p class="muted small" style="margin-top:0">這個月寫了 ${wrote} 天</p>
       <div class="cal">${cells}</div>
-      <div class="legend cleg"><span><b class="g"></b>好</span><span><b class="m"></b>普通</span><span><b class="l"></b>低落</span><span><b></b>沒寫</span></div></div>
+      <div class="legend cleg"><span><b class="g"></b>好</span><span><b class="m"></b>普通</span><span><b class="l"></b>低落</span><span><b></b>沒寫</span></div>
+      <div class="legend cleg kleg">${LIFE_CATS.map(([k, i, n]) => `<span class="k-${k}"><b style="border-radius:50%"></b>${n}</span>`).join('')}</div></div>
     <div id="dayBox"></div>`;
   const paintDay = async key => {
     const box = $('#dayBox'); if (!box) return;
     if (!key) { box.innerHTML = '<p class="muted small">點一天看那天的日記，沒寫的日子可以補寫。</p>'; return; }
     const list = (byDay[key] || []).sort((a, b) => a.time.localeCompare(b.time));
-    box.innerHTML = `<div class="day">${esc(niceDate(key))}</div>${list.map(itemHtml).join('') || '<p class="muted small">這天還沒寫。</p>'}
+    box.innerHTML = `<div class="day">${esc(niceDate(key))}</div><div id="lifeBox"></div><h2 class="dh">📖 這天的日記</h2>${list.map(itemHtml).join('') || '<p class="muted small">這天還沒寫。</p>'}
       <button class="btn primary wide" id="writeDay" data-day="${key}">✍️ ${key === today ? '寫今天的日記' : list.length ? '這天再寫一篇' : '補寫這天'}</button>`;
     loadThumbs(list);
+    paintLifeDay(key, $('#lifeBox'));   // life.js：流水帳＋補一筆
   };
   paintDay(calSel);
+  paintCalDots(ym);                     // life.js：每天的分類小圓點
   view.oninput = view.onchange = null;
   view.onclick = async ev => {
     const btn = ev.target.closest?.('[data-day]'); if (!btn) return;
@@ -797,6 +801,7 @@ async function sync() {
     }
   });
   await loadQuotes();
+  await attempt(syncLife);   // life.js：紀念日、補的事
   }
   const error = errs[0] || '';
   await kvSet('lastSync', { at: Date.now(), error });
@@ -804,7 +809,8 @@ async function sync() {
   bar(error ? `⚠️ ${error}，等一下會再試` : '');
   if (error) { clearTimeout(retryTimer); retryTimer = setTimeout(sync, 60000); }
   const here = location.hash || '#today';
-  if (!error && !here.startsWith('#today') && !here.startsWith('#settings')) route();
+  const editing = here.startsWith('#ann/edit') || document.querySelector('#lifeForm .lform');   // v0.6.0：正在填紀念日、補一筆時不重畫，字才不會不見
+  if (!error && !editing && !here.startsWith('#today') && !here.startsWith('#settings')) route();
   if (syncAgain) { syncAgain = false; sync(); }
 }
 
@@ -837,14 +843,15 @@ async function renderHelp(which) {
 async function route() {
   const h = location.hash || '#today';
   await stopVoice();   // 換頁前收好錄音，才不會掉
-  const tab = h.startsWith('#e/') ? 'list' : h.startsWith('#cal') ? 'cal' : h.startsWith('#help') ? 'settings' : h.slice(1);
+  const tab = h.startsWith('#e/') ? 'list' : h.startsWith('#cal') ? 'cal' : h.startsWith('#ann') ? 'ann' : h.startsWith('#help') ? 'settings' : h.slice(1);
   document.querySelectorAll('#nav a').forEach(a => a.classList.toggle('on', a.dataset.tab === tab));
   if (h.startsWith('#e/')) await renderEntry(decodeURIComponent(h.slice(3)));
   else if (h === '#list') await renderList();
   else if (h.startsWith('#cal')) await renderCal(h.slice(5));
   else if (h === '#settings') await renderSettings();
   else if (h.startsWith('#help')) await renderHelp(h.slice(6));
-  else await renderToday();
+  else if (h.startsWith('#ann')) await renderAnniv(decodeURIComponent(h.slice(5)));
+  else { await renderToday(); await paintAnnivTop(); }
   scrollTo(0, 0);
 }
 addEventListener('hashchange', route);

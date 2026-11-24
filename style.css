@@ -135,3 +135,50 @@ ol.body { white-space: normal; padding-left: 22px; margin: 0; }
 .doc th { background: var(--pale); }
 .doc code { background: var(--pale); border-radius: 4px; padding: 0 4px; font-size: .9em; }
 .doc ul, .doc ol { padding-left: 1.3em; }
+
+/* ---------------- v0.6.0 生活日曆、紀念日（life.js） ---------------- */
+:root { --k-work: #7a8ca0; --k-family: #e36d8f; --k-xiu: #c9a227; --k-learn: #3d9fe3; --k-health: #47b07a; --k-proj: #8a6bd1; --k-rest: #f08a3c; --up: #f3953a; --down: #3d9fe3; }
+.k-work { --k: var(--k-work); } .k-family { --k: var(--k-family); } .k-xiu { --k: var(--k-xiu); } .k-learn { --k: var(--k-learn); }
+.k-health { --k: var(--k-health); } .k-proj { --k: var(--k-proj); } .k-rest { --k: var(--k-rest); }
+.center { text-align: center; }
+/* 紀念日卡片：上面事項、中間數字（點一下換 日／週／月／年）、下面起始日 */
+.anncard { background: var(--card); border-radius: 18px; padding: 16px 16px 12px; margin-bottom: 12px; box-shadow: 0 3px 12px rgba(50, 120, 170, .12); cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; text-align: center; border-top: 6px solid var(--down); }
+.anncard.up { border-top-color: var(--up); }
+.anncard:active { transform: scale(.98); }
+.anncard .at { font-size: 18px; font-weight: 700; }
+.anncard .an { display: flex; justify-content: center; align-items: baseline; gap: 6px; line-height: 1.1; margin: 6px 0 2px; }
+.anncard .an b { font-size: 52px; font-weight: 800; letter-spacing: 1px; }
+.anncard .an span { font-size: 18px; color: #fff; background: var(--down); border-radius: 10px; padding: 1px 9px; }
+.anncard.up .an span { background: var(--up); }
+.anncard .ar { color: var(--muted); font-size: 15px; }
+.anncard .ad { color: var(--muted); font-size: 14px; margin-top: 6px; }
+.anncard .ahint { color: var(--muted); font-size: 12px; opacity: .7; }
+.anncard.big .an b { font-size: 76px; }
+.under #annivTop .anncard { margin-bottom: 12px; }
+.mile { text-align: center; font-size: 15px; color: var(--accent); margin: 0 0 12px; }
+.annlist { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.annrow { display: flex; align-items: stretch; background: var(--card); border-radius: 12px; overflow: hidden; text-decoration: none; color: var(--ink); box-shadow: 0 2px 8px rgba(50, 120, 170, .1); }
+.annrow .nm { flex: 1; padding: 10px 12px; font-weight: 700; font-size: 16px; display: flex; flex-direction: column; justify-content: center; }
+.annrow .nm small { font-weight: 400; font-size: 12px; color: var(--muted); }
+.annrow .num { display: flex; align-items: center; color: #fff; background: var(--down); min-width: 116px; }
+.annrow .num.up { background: var(--up); }
+.annrow .num b { flex: 1; text-align: center; font-size: 22px; padding: 0 8px; }
+.annrow .num i { font-style: normal; padding: 0 12px; align-self: stretch; display: flex; align-items: center; background: rgba(0, 0, 0, .08); }
+/* 月曆格的小圓點與當天流水帳 */
+.cd { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.cd .dots { display: flex; gap: 2px; height: 6px; margin-top: 1px; }
+.cd .dots i { width: 5px; height: 5px; border-radius: 50%; background: var(--k); }
+.cd.g .dots i, .cd.l .dots i { box-shadow: 0 0 0 1px #fff; }
+h2.dh { font-size: 16px; margin: 14px 0 8px; }
+.life { margin-bottom: 4px; }
+.li { display: flex; align-items: center; gap: 10px; background: var(--card); border-radius: 12px; padding: 8px 12px; margin-bottom: 6px; border-left: 5px solid var(--k, var(--line)); }
+.li.off { opacity: .6; }
+.li[data-log], .li[data-work] { cursor: pointer; }
+.lic { font-size: 20px; width: 26px; text-align: center; }
+.lit { flex: 1; display: flex; flex-direction: column; font-size: 15px; }
+.lit small { color: var(--muted); font-size: 13px; }
+.lie, .lis { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.lform .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.lform .chip.on, #lCat .chip.on { background: var(--k); color: #fff; }
+.legend.kleg { flex-wrap: wrap; }
+.legend.kleg b { background: var(--k); }
